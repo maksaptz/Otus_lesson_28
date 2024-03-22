@@ -1,0 +1,57 @@
+---
+- name: Install Postgresql
+  apt:
+    name: "{{item}}"
+    state: present
+    update_cache: yes
+  loop:
+       - python3-psycopg2
+       - postgresql
+       - postgresql-contrib
+       - pip
+       - acl
+
+- name: install pexpect
+  pip:
+    name: pexpect
+  become: yes
+
+- name: stop postgresql-server on node2
+  service: 
+    name: postgresql
+    state: stopped
+
+- name: Remove files from data catalog
+  file:
+    path: /var/lib/postgresql/13/main
+    state: absent
+
+- name: copy files from master to slave
+  ansible.builtin.expect:
+    command: 'pg_basebackup -h 192.168.50.10 -U  replicator -p 5432 -D /var/lib/postgresql/13/main -R -P'
+    responses: 
+      '.*Password*': "12345"
+  become: true
+  become_user: postgres
+  ignore_errors: true
+
+- name: copy postgresql.conf
+  template:
+    src: templates/postgresql.conf
+    dest: /etc/postgresql/13/main/postgresql.conf
+    owner: postgres
+    group: postgres
+    mode: '0644'
+
+- name: copy pg_hba.conf
+  template:
+    src: templates/pg_hba.conf
+    dest: /etc/postgresql/13/main/pg_hba.conf
+    owner: postgres
+    group: postgres
+    mode: '0640'
+ 
+- name: start postgresql-server on node2
+  service: 
+    name: postgresql
+    state: started

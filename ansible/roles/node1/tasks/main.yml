@@ -1,0 +1,41 @@
+---
+- name: Install Postgresql
+  apt:
+    name: "{{item}}"
+    state: present
+    update_cache: yes
+  loop:
+       - python3-psycopg2
+       - postgresql
+       - postgresql-contrib
+       - acl
+
+- name: copy postgresql.conf
+  copy:
+    src: templates/postgresql.conf
+    dest: /etc/postgresql/13/main/postgresql.conf
+    owner: postgres
+    group: postgres
+    mode: '0644'
+
+- name: copy pg_hba.conf
+  copy:
+    src: templates/pg_hba.conf
+    dest: /etc/postgresql/13/main/pg_hba.conf
+    owner: postgres
+    group: postgres
+    mode: '0640'
+
+- name: Create replication user account
+  postgresql_user:
+    name: "{{ user_name }}"
+    password: "{{ user_password }}"
+    role_attr_flags: REPLICATION
+  become: true
+  become_user: postgres
+  ignore_errors: true
+
+- name: restart postgresql-server on node1
+  service: 
+    name: postgresql
+    state: restarted

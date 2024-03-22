@@ -1,0 +1,184 @@
+---
+- name: Install packets on barman
+  apt:
+    name: "{{item}}"
+    state: present
+    update_cache: yes
+  loop:
+       - python3-psycopg2
+       - postgresql
+       - postgresql-contrib
+       - wget
+       - acl
+       - barman
+  when: (ansible_hostname == "barman")
+
+- name: install barman-cli and postgresql packages on nodes
+  apt:
+    name:
+      - barman-cli
+    state: present
+    update_cache: true
+
+- name: generate SSH key for postgres on node1
+  user:
+    name: postgres
+    generate_ssh_key: yes
+    ssh_key_type: rsa
+    ssh_key_bits: 4096
+    force: no
+  when: (ansible_hostname == "node1")
+ 
+- name: generate SSH key for barman
+  user:
+    name: barman
+    uid: 994
+    shell: /bin/bash
+    generate_ssh_key: yes
+    ssh_key_type: rsa
+    ssh_key_bits: 4096
+    force: no
+  when: (ansible_hostname == "barman")
+
+- name: fetch all public ssh keys node1
+  shell: cat /var/lib/postgresql/.ssh/id_rsa.pub
+  register: ssh_keys
+  when: (ansible_hostname == "node1")
+
+- name: transfer public key to barman
+  delegate_to: barman
+  authorized_key:
+    key: "{{ ssh_keys.stdout }}"
+    comment: "{{ansible_hostname}}"
+    user: barman
+  when: (ansible_hostname == "node1")
+
+- name: fetch all public ssh keys barman
+  shell: cat /var/lib/barman/.ssh/id_rsa.pub
+  register: ssh_keys
+  when: (ansible_hostname == "barman")
+
+- name: transfer public key from node1 to barman
+  delegate_to: node1
+  authorized_key:
+    key: "{{ ssh_keys.stdout }}"
+    comment: "{{ansible_hostname}}"
+    user: postgres
+  when: (ansible_hostname == "barman")
+
+- name: Create barman user
+  become_user: postgres
+  postgresql_user:
+    name: barman
+    password: '{{ barman_user_password }}'
+    role_attr_flags: SUPERUSER 
+  become: true
+  become_user: postgres
+  ignore_errors: true
+  when: (ansible_hostname == "node1")
+
+- name: Add permission for barman
+  lineinfile:
+    path: /etc/postgresql/13/main/pg_hba.conf
+    line: 'host    replication   {{ barman_user }}    {{ barman_ip }}/32    password'
+  become: true
+  become_user: postgres
+  when: (ansible_hostname == "node1") or
+        (ansible_hostname == "node2")
+ 
+- name: Add permission for barman
+  lineinfile:
+    path: /etc/postgresql/13/main/pg_hba.conf
+    line: 'host    all   {{ barman_user }}    {{ barman_ip }}/32    password'
+  become: true
+  become_user: postgres
+  when: (ansible_hostname == "node1") or
+        (ansible_hostname == "node2")
+
+- name: restart postgresql-server on node1
+  service: 
+    name: postgresql
+    state: restarted
+  when: (ansible_hostname == "node1")
+
+- name: Create DB for backup
+  postgresql_db:
+    name: otus
+    encoding: UTF-8
+    template: template0
+    state: present
+  become: true
+  become_user: postgres
+  when: (ansible_hostname == "node1")
+
+- name: Add tables to otus_backup
+  postgresql_table:
+    db: otus
+    name: test1
+    state: present
+  become: true
+  become_user: postgres
+  when: (ansible_hostname == "node1")
+
+- name: copy .pgpass
+  template:
+    src: templates/pgpass
+    dest: /var/lib/barman/.pgpass
+    owner: barman
+    group: barman
+    mode: '0600'
+  when: (ansible_hostname == "barman")
+
+- name: copy barman.conf
+  copy:
+    src: templates/barman.conf
+    dest: /etc/barman.conf 
+    owner: barman
+    group: barman
+    mode: '0755'
+  when: (ansible_hostname == "barman")
+
+- name: copy node1.conf
+  template:
+    src: templates/node1.conf
+    dest: /etc/barman.d/node1.conf
+    owner: barman
+    group: barman
+    mode: '0755'
+  when: (ansible_hostname == "barman")
+
+- name: Create a directory if it does not exist
+  file:
+    path: /var/log/barman
+    state: directory
+    owner: barman
+    group: barman
+    mode: '0750'    
+  when: (ansible_hostname == "barman")
+
+- name: Create log for barmen
+  file:
+    path: /var/log/barman/barman.log
+    state: touch 
+    owner: barman
+    group: barman
+    mode: '644'
+  when: (ansible_hostname == "barman")
+
+- name: barman switch-wal node1
+  shell: barman switch-wal node1
+  become: true
+  become_user: barman
+  when: (ansible_hostname == "barman")
+
+- name: barman cron
+  shell: barman cron
+  become: true
+  become_user: barman 
+  when: (ansible_hostname == "barman")
+
+- name: barman restart log
+  shell: barman switch-xlog --force --archive  node1
+  become: true
+  become_user: barman
+  when: (ansible_hostname == "barman")
